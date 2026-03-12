@@ -6,7 +6,11 @@
     "dev": "ts-node -r tsconfig-paths/register src/main.ts",
     "start": "node -r tsconfig-paths/register build/main.js",
     "build": "tsc",
-    "build:watch": "tsc --watch"
+    "build:watch": "tsc --watch",
+    "migration:create": "mikro-orm migration:create",
+    "migration:up": "mikro-orm migration:up",
+    "migration:down": "mikro-orm migration:down",
+    "migration:pending": "mikro-orm migration:pending"
   },
   "dependencies": {
     "@langchain/core": "^1.1.30",
@@ -14,7 +18,7 @@
     "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
     "@langchain/openai": "^1.2.12",
     "@mikro-orm/nestjs": "^6.1.1",
-    "@mikro-orm/postgresql": "^6.6.9",
+    "@mikro-orm/postgresql": "^6.1.1",
     "@nestjs/common": "^11.1.15",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.1.15",
@@ -27,7 +31,7 @@
     "class-validator": "^0.15.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "mikro-orm": "^6.6.9",
+    "mikro-orm": "^6.1.1",
     "nestjs-pino": "^4.6.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
@@ -37,6 +41,7 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@mikro-orm/cli": "^6.1.1",
     "@types/express": "^5.0.6",
     "@types/uuid": "^10.0.0",
     "ts-node": "^10.9.2",

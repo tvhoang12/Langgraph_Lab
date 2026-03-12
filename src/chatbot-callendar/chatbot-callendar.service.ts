@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CreateChatbotCallendarDto } from './dto/create-chatbot-callendar.dto';
 import { UpdateChatbotCallendarDto } from './dto/update-chatbot-callendar.dto';
 import { AiAgentService } from './ai-agent.service';
+import { ApprovalService } from './approval.service';
 import { v4 as uuidv4 } from 'uuid';
 import { BaseMessage } from '@langchain/core/messages';
 import { SystemMessage } from '@langchain/core/messages';
@@ -17,7 +18,10 @@ export class ChatbotCallendarService {
   private readonly SUMMARY_THRESHOLD = 6;
   private sessionMemory: Map<string, { summary: string; memory: Record<string, any> }> = new Map();
 
-  constructor(private aiAgentService: AiAgentService) {}
+  constructor(
+    private aiAgentService: AiAgentService,
+    private approvalService: ApprovalService,
+  ) {}
 
   async create(createChatbotCallendarDto: CreateChatbotCallendarDto) {
     const { userId, message, lunarBirthYear, activity } = createChatbotCallendarDto;
@@ -96,7 +100,7 @@ export class ChatbotCallendarService {
     sessionId: string,
     updateChatbotCallendarDto: UpdateChatbotCallendarDto,
   ) {
-    const { userId, message, lunarBirthYear, activity } = updateChatbotCallendarDto;
+    const { userId = 'anonymous', message, lunarBirthYear, activity } = updateChatbotCallendarDto;
 
     try {
       // Add user message to history
@@ -110,7 +114,37 @@ export class ChatbotCallendarService {
         activity,
       );
 
-      const assistantMessage = this.extractAgentResponse(response);
+      // Kiểm tra xem có tool call hay không
+      const approvalStatus = await this.handlePendingApproval(
+        response,
+        sessionId,
+        userId,
+        message,
+      );
+
+      if (approvalStatus.hasPendingApproval) {
+        // Có pending approval, trả về approval ID cho client
+        this.logger.log(
+          `Session ${sessionId} has pending approval: ${approvalStatus.approvalId}`,
+        );
+
+        return {
+          success: true,
+          data: {
+            sessionId,
+            userId,
+            message,
+            status: 'PENDING_APPROVAL',
+            approvalId: approvalStatus.approvalId,
+            message_info: 'AI đã quyết định gọi tool. Vui lòng xác nhận/chỉnh sửa trước khi tiếp tục.',
+            nextStep: `GET /approval/${approvalStatus.approvalId} để xem chi tiết hoặc POST /approval/submit để phê duyệt`,
+            timestamp: new Date(),
+          },
+        };
+      }
+
+      // Không có tool call, trả về response bình thường
+      const assistantMessage = this.extractAgentResponse(approvalStatus.response);
 
       // Add assistant response to history
       await this.aiAgentService.addAssistantMessage(
@@ -132,13 +166,12 @@ export class ChatbotCallendarService {
           response: assistantMessage,
           summary,
           memory,
-          state: response.state,
+          state: approvalStatus.response.state,
           timestamp: new Date(),
         },
       };
     } catch (error) {
       this.logger.error(`Error updating chatbot message: ${error.message}`);
-      // this.logger.debug(`Failed to update session: ${sessionId}`);
       throw error;
     }
   }
@@ -223,4 +256,84 @@ export class ChatbotCallendarService {
     }
   }
 
+  /**
+   * Kiểm tra xem response có chứa tool call hay không
+   */
+  private extractToolCallsFromResponse(response: any): any[] {
+    const toolCalls: any[] = [];
+
+    if (response.messages && Array.isArray(response.messages)) {
+      response.messages.forEach((msg: any) => {
+        if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0) {
+          toolCalls.push(...msg.tool_calls);
+        }
+      });
+    }
+
+    return toolCalls;
+  }
+
+  /**
+   * Xử lý pending approval khi AI gọi tool
+   * Nếu có tool call, tạo pending approval và trả về approval ID
+   * Nếu không, trả về response bình thường
+   */
+  private async handlePendingApproval(
+    response: any,
+    sessionId: string,
+    userId: string,
+    userMessage: string,
+  ): Promise<
+    | { hasPendingApproval: true; approvalId: string; response?: undefined }
+    | { hasPendingApproval: false; approvalId?: undefined; response: any }
+  > {
+    const toolCalls = this.extractToolCallsFromResponse(response);
+
+    if (toolCalls.length === 0) {
+      // Không có tool call, trả về response bình thường
+      return {
+        hasPendingApproval: false,
+        response,
+      };
+    }
+
+    // Có tool call, tạo pending approval
+    // Lưu ý: Chúng ta sẽ tạo approval cho tool call đầu tiên
+    const firstToolCall = toolCalls[0];
+
+    try {
+      const pendingApproval = await this.approvalService.createPendingApproval(
+        sessionId,
+        userId,
+        firstToolCall.name,
+        firstToolCall.args || {},
+        {}, // toolOutput còn trống vì chưa execute
+        {
+          userMessage,
+          aiDecision: `Gọi tool "${firstToolCall.name}" với parameters: ${JSON.stringify(firstToolCall.args)}`,
+        },
+      );
+
+      this.logger.log(
+        `Created pending approval ${pendingApproval.id} for session ${sessionId}`,
+      );
+
+      return {
+        hasPendingApproval: true,
+        approvalId: pendingApproval.id,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error creating pending approval: ${error.message}`,
+      );
+      // Nếu lỗi, vẫn trả về response để không block user
+      return {
+        hasPendingApproval: false,
+        response,
+      };
+    }
+  }
+
 }
+
+
