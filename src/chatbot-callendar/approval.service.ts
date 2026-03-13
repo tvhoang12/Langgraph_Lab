@@ -2,13 +2,17 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/core';
 import { v4 as uuidv4 } from 'uuid';
 import { PendingApprovalEntity, ApprovalStatus } from './entities/pending-approval-db.entity';
-import { PendingApproval, ApprovalAction } from './entities/pending-approval.entity';
+import { PendingApproval, ApprovalAction } from './entities/pending-approval.types';
+import { AiAgentService } from './ai-agent.service';
 
 @Injectable()
 export class ApprovalService {
   private logger = new Logger(ApprovalService.name);
 
-  constructor(private em: EntityManager) {}
+  constructor(
+    private em: EntityManager,
+    private aiAgentService: AiAgentService,
+  ) {}
 
   /**
    * Tạo pending approval khi AI quyết định gọi tool
@@ -177,7 +181,135 @@ export class ApprovalService {
   ): Promise<PendingApproval[]> {
     return this.getPendingApprovals(sessionId, 'PENDING');
   }
+  /**
+   * CÁCH 2: Submit approval action và trực tiếp trả AI response
+   * Sau khi APPROVE/MODIFY, execute tool và invoke agent để lấy response
+   */
+  async submitApprovalActionAndGetResponse(
+    approvalId: string,
+    action: ApprovalAction,
+    sessionId: string,
+    lunarBirthYear?: number,
+    activity?: string,
+  ): Promise<{ approval: PendingApproval; aiResponse?: string; message?: string }> {
+    // Trước tiên, submit approval action
+    const approval = await this.submitApprovalAction(approvalId, action);
 
+    this.logger.log(
+      `Approval ${approvalId} submitted with action: ${action.action}`,
+    );
+
+    // Nếu REJECTED, không invoke agent
+    if (approval.status === 'REJECTED') {
+      return {
+        approval,
+        message: `Tool execution "${approval.toolName}" was rejected${
+          action.notes ? ': ' + action.notes : ''
+        }`,
+      };
+    }
+
+    // Nếu APPROVED hoặc MODIFIED, execute tool và invoke agent để lấy AI response
+    try {
+      // Execute tool với input parameters
+      const toolOutput = await this.executeTool(
+        approval.toolName,
+        approval.toolInput,
+        approval.status === 'MODIFIED' && action.modifiedData
+          ? action.modifiedData
+          : undefined,
+      );
+
+      // Update approval với tool output
+      const entity = await this.em.findOne(PendingApprovalEntity, { id: approvalId });
+      if (entity) {
+        entity.toolOutput = toolOutput;
+        await this.em.persistAndFlush(entity);
+      }
+
+      this.logger.log(
+        `Tool "${approval.toolName}" executed successfully: ${JSON.stringify(toolOutput).substring(0, 100)}`,
+      );
+
+      // Invoke agent để lấy AI response
+      const agentInput = `Tool "${approval.toolName}" executed successfully with result: ${JSON.stringify(toolOutput)}`;
+
+      const agentResponse = await this.aiAgentService.invokeAgent(
+        agentInput,
+        sessionId,
+        lunarBirthYear,
+        activity,
+      );
+
+      const aiResponse = this.extractAgentResponse(agentResponse);
+
+      this.logger.log(
+        `Got AI response for approval ${approvalId}: ${aiResponse.substring(0, 100)}...`,
+      );
+
+      return {
+        approval,
+        aiResponse,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error getting AI response for approval ${approvalId}: ${error.message}`,
+      );
+      return {
+        approval,
+        message: `Approval submitted but failed to execute tool: ${error.message}`,
+      };
+    }
+  }
+
+  private async executeTool(
+    toolName: string,
+    toolInput: Record<string, any>,
+    modifiedData?: Record<string, any>,
+  ): Promise<Record<string, any>> {
+    try {
+      const tools = this.aiAgentService.getAgentTools();
+      const tool = tools.find((t) => t.name === toolName);
+
+      if (!tool) {
+        throw new Error(`Tool "${toolName}" not found`);
+      }
+
+      // Use modified data if provided, otherwise use original input
+      const finalInput = modifiedData || toolInput;
+
+      // Execute the tool
+      const toolOutput = await tool.invoke(finalInput);
+
+      return typeof toolOutput === 'string'
+        ? { result: toolOutput }
+        : toolOutput;
+    } catch (error) {
+      this.logger.error(
+        `Error executing tool "${toolName}": ${error.message}`,
+      );
+      throw error;
+    }
+  }
+
+  private extractAgentResponse(response: any): string {
+    if (typeof response === 'string') {
+      return response;
+    }
+
+    if (response.messages && response.messages.length > 0) {
+      const lastMessage = response.messages[response.messages.length - 1];
+      return typeof lastMessage.content === 'string'
+        ? lastMessage.content
+        : JSON.stringify(lastMessage.content);
+    }
+
+    if (response.output) {
+      return response.output;
+    }
+
+    return JSON.stringify(response);
+  }
   /**
    * Map entity to interface
    */

@@ -257,6 +257,83 @@ export class ChatbotCallendarService {
   }
 
   /**
+   * Lấy response từ AI sau khi human approve/modify
+   */
+  async getApprovalResponse(approvalId: string, sessionId: string) {
+    try {
+      // Lấy approval details
+      const approval = await this.approvalService.getPendingApprovalById(approvalId);
+
+      if (approval.status === 'PENDING') {
+        throw new Error(
+          `Approval ${approvalId} still pending. Please submit action first.`,
+        );
+      }
+
+      if (approval.status === 'REJECTED') {
+        return {
+          success: true,
+          data: {
+            sessionId,
+            approvalId,
+            status: 'REJECTED',
+            message: `Tool execution "${approval.toolName}" was rejected${
+              approval.userNotes ? ': ' + approval.userNotes : ''
+            }`,
+            toolName: approval.toolName,
+            timestamp: new Date(),
+          },
+        };
+      }
+
+      // Nếu APPROVED hoặc MODIFIED, get tool output và invoke agent
+      let toolOutput = approval.toolOutput;
+
+      if (approval.status === 'MODIFIED' && approval.modifiedOutput) {
+        toolOutput = approval.modifiedOutput;
+      }
+
+      // Invoke agent để tiếp tục với tool result
+      const { summary, memory } = await this.aiAgentService.getSessionState(sessionId);
+
+      const agentResponse = await this.aiAgentService.invokeAgent(
+        `Tool "${approval.toolName}" executed successfully with result: ${JSON.stringify(toolOutput)}`,
+        sessionId,
+        memory.lunarBirthYear,
+        memory.activity,
+      );
+
+      const assistantMessage = this.extractAgentResponse(agentResponse);
+
+      // Add assistant response to history
+      await this.aiAgentService.addAssistantMessage(sessionId, assistantMessage);
+
+      this.logger.log(
+        `Got response for approval ${approvalId} in session ${sessionId}`,
+      );
+
+      return {
+        success: true,
+        data: {
+          sessionId,
+          approvalId,
+          status: approval.status,
+          toolName: approval.toolName,
+          toolOutput,
+          userNotes: approval.userNotes,
+          aiResponse: assistantMessage,
+          timestamp: new Date(),
+        },
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error getting approval response for ${approvalId}: ${error.message}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Kiểm tra xem response có chứa tool call hay không
    */
   private extractToolCallsFromResponse(response: any): any[] {

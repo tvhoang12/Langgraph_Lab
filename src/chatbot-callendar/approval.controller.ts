@@ -101,31 +101,61 @@ export class ApprovalController {
   }
 
   /**
-   * Submit approval action (APPROVE/REJECT/MODIFY)
+   * CÁCH 2: Submit approval action + trực tiếp trả AI response
    */
   @Post('submit')
   @ApiOperation({
-    summary: 'Approve/Reject/Modify AI decision',
+    summary: 'Approve/Reject/Modify + lấy AI response (Cách 2)',
     description:
-      'Con người xác nhận hoặc sửa đổi quyết định của AI trước khi tiếp tục',
+      'Submit approval action và nhận AI response trực tiếp (nếu APPROVE/MODIFY). Optional: pass sessionId + lunarBirthYear + activity để lấy response',
   })
   @ApiResponse({
     status: 200,
-    description: 'Action submitted successfully',
+    description: 'Action submitted + AI response trả về',
     schema: {
       example: {
         success: true,
         data: {
-          id: 'approval-uuid',
-          sessionId: 'session-uuid',
-          status: 'APPROVED',
-          approvedAt: '2026-03-09T10:05:00Z',
-          approvedBy: 'user-001',
+          approval: {
+            id: 'approval-uuid',
+            status: 'APPROVED',
+            toolName: 'xem_ngay_tot_viec_tot_am_lich_vn',
+          },
+          aiResponse: 'Dựa trên kết quả, những ngày tốt để khởi công là 15/3, 16/3, 20/3...',
         },
       },
     },
   })
-  async submitApprovalAction(@Body() submitApprovalDto: SubmitApprovalDto) {
+  async submitApprovalAction(
+    @Body()
+    submitApprovalDto: SubmitApprovalDto & {
+      sessionId?: string;
+      lunarBirthYear?: number;
+      activity?: string;
+    },
+  ) {
+    // Nếu có sessionId, sử dụng Cách 2 (trả AI response trực tiếp)
+    if (submitApprovalDto.sessionId) {
+      const result = await this.approvalService.submitApprovalActionAndGetResponse(
+        submitApprovalDto.approvalId,
+        {
+          action: submitApprovalDto.action,
+          notes: submitApprovalDto.notes,
+          modifiedData: submitApprovalDto.modifiedData,
+          approvedBy: submitApprovalDto.userId,
+        },
+        submitApprovalDto.sessionId,
+        submitApprovalDto.lunarBirthYear,
+        submitApprovalDto.activity,
+      );
+
+      return {
+        success: true,
+        data: result,
+      };
+    }
+
+    // Ngược lại, sử dụng cách cũ (chỉ trả approval status)
     const approval = await this.approvalService.submitApprovalAction(
       submitApprovalDto.approvalId,
       {
@@ -138,7 +168,10 @@ export class ApprovalController {
 
     return {
       success: true,
-      data: approval,
+      data: {
+        approval,
+        message: 'Use optional sessionId param to get AI response directly',
+      },
     };
   }
 

@@ -5,7 +5,7 @@ import { createReactAgent, ToolNode } from '@langchain/langgraph/prebuilt';
 import { Annotation, MessagesAnnotation, StateGraph, START, END } from '@langchain/langgraph';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { Pool } from 'pg';
-import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
+import { BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
   toolXemNgayTot,
   toolDanhSachNgayTot,
@@ -86,6 +86,61 @@ export class AiAgentService implements OnModuleInit {
   private sessionMemory: Map<string, { summary: string; memory: Record<string, any> }> = new Map();
   private initialized = false;
   private tools: any[] = [];
+
+  private normalizeMessageContent(content: unknown): any {
+    if (typeof content === 'string') {
+      return content;
+    }
+
+    if (Array.isArray(content)) {
+      return content.map((block) => {
+        if (typeof block === 'string') {
+          return { type: 'text' as const, text: block };
+        }
+
+        if (block && typeof block === 'object') {
+          const typedBlock = block as Record<string, unknown>;
+
+          if (typeof typedBlock.type === 'string') {
+            return typedBlock;
+          }
+
+          if (typeof typedBlock.text === 'string') {
+            return { type: 'text' as const, text: typedBlock.text };
+          }
+
+          return {
+            type: 'text' as const,
+            text: JSON.stringify(typedBlock),
+          };
+        }
+
+        return { type: 'text' as const, text: String(block ?? '') };
+      });
+    }
+
+    if (content === null || content === undefined) {
+      return '';
+    }
+
+    if (typeof content === 'object' && 'text' in (content as Record<string, unknown>)) {
+      const contentObject = content as Record<string, unknown>;
+      if (typeof contentObject.text === 'string') {
+        return [{ type: 'text' as const, text: contentObject.text }];
+      }
+    }
+
+    return String(content);
+  }
+
+  private normalizeMessagesForModel(messages: BaseMessage[]): BaseMessage[] {
+    return messages.map((message) => {
+      (message as any).content = this.normalizeMessageContent(
+        message.content,
+      );
+      return message;
+    });
+  }
 
   constructor(private readonly configService: ConfigService) {
     this.logger.log('AiAgentService instantiated - LLM will initialize on first use');
@@ -217,11 +272,16 @@ ${userContext}
 
 Current time: ${new Date().toLocaleString()}`;
 
-        // Chuẩn bị messages
-        const messages_to_invoke = [
+        // Filter messages: remove old SystemMessages, use current one
+        const filtered_messages = state.messages.filter(
+          (msg) => !(msg instanceof SystemMessage),
+        );
+
+        // Chuẩn bị messages với SystemMessage once
+        const messages_to_invoke = this.normalizeMessagesForModel([
           new SystemMessage(system_prompt),
-          ...state.messages,
-        ];
+          ...filtered_messages,
+        ]);
 
         // Gọi model với tools binding
         const response = await this.modelWithTools.invoke(messages_to_invoke);
@@ -249,10 +309,25 @@ Current time: ${new Date().toLocaleString()}`;
         };
       })
       .addNode('tools', async (state) => {
-        // Thực thi tools (tương tự LangGraphService)
+        // Thực thi tools - ensure tool responses are properly formatted
         const tool_node = new ToolNode(this.tools);
-        const output: any = await tool_node.invoke(state);
-        return output;
+        // ToolNode.invoke expects state with messages array
+        const normalized_state_messages = this.normalizeMessagesForModel(state.messages);
+        const result = await tool_node.invoke({ messages: normalized_state_messages });
+        
+        // Ensure tool responses have proper type for OpenAI API
+        if (result.messages) {
+          result.messages = result.messages.map((msg) => {
+            if (msg instanceof ToolMessage) {
+              return new ToolMessage({
+                content: this.normalizeMessageContent(msg.content),
+                tool_call_id: msg.tool_call_id,
+              });
+            }
+            return msg;
+          });
+        }
+        return result;
       })
       .addEdge(START, 'agent')
       .addConditionalEdges('agent', (state) => {
