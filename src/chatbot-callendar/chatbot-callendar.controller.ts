@@ -154,4 +154,51 @@ export class ChatbotCallendarController {
   async remove(@Param('sessionId') sessionId: string) {
     return await this.chatbotCallendarService.remove(sessionId);
   }
+
+  /**
+   * CÁCH 1: Lấy response của AI sau khi human approve/modify approval
+   */
+  @Get(':sessionId/approval/:approvalId/response')
+  @ApiOperation({
+    summary: 'Lấy AI response sau khi approve/modify (Cách 1)',
+    description:
+      'Sau khi submit approval action (APPROVE/MODIFY), gọi endpoint này để lấy AI response dựa trên approval result',
+  })
+  @ApiParam({
+    name: 'sessionId',
+    description: 'Session ID',
+  })
+  @ApiParam({
+    name: 'approvalId',
+    description: 'Approval ID',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'AI response dựa trên approval result',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          sessionId: 'session-uuid',
+          approvalId: 'approval-uuid',
+          status: 'APPROVED',
+          toolName: 'xem_ngay_tot_viec_tot_am_lich_vn',
+          toolOutput: {
+            goodDays: ['2026-03-15', '2026-03-16'],
+          },
+          aiResponse: 'Dựa trên thông tin của bạn, những ngày tốt để khởi công là...',
+          timestamp: '2026-03-13T09:15:00Z',
+        },
+      },
+    },
+  })
+  async getApprovalResponse(
+    @Param('sessionId') sessionId: string,
+    @Param('approvalId') approvalId: string,
+  ) {
+    return await this.chatbotCallendarService.getApprovalResponse(
+      approvalId,
+      sessionId,
+    );
+  }
 }
