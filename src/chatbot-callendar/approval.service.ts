@@ -103,6 +103,18 @@ export class ApprovalService {
       );
     }
 
+    // Lưu coaching feedback nếu được cung cấp
+    if (action.coaching) {
+      entity.coachingFeedback = {
+        ...action.coaching,
+        coachedBy: action.coaching.coachedBy || action.approvedBy,
+        coachedAt: new Date(),
+      };
+      this.logger.log(
+        `Coaching feedback set for approval ${approvalId}: ${action.coaching.reason}`,
+      );
+    }
+
     // Cập nhật approval dựa trên action
     switch (action.action) {
       case 'APPROVE':
@@ -166,11 +178,19 @@ export class ApprovalService {
       throw new BadRequestException(`Approval ${approvalId} was rejected`);
     }
 
-    // APPROVED: return original toolOutput
-    // MODIFIED: return modifiedOutput
-    return entity.status === ApprovalStatus.MODIFIED
-      ? entity.modifiedOutput || entity.toolOutput || {}
-      : entity.toolOutput || {};
+    // MODIFIED: return modifiedOutput if exists, otherwise toolOutput
+    // APPROVED: return toolOutput
+    const output = entity.status === ApprovalStatus.MODIFIED
+      ? entity.modifiedOutput || entity.toolOutput
+      : entity.toolOutput;
+
+    if (!output) {
+      throw new BadRequestException(
+        `No output available for approval ${approvalId}. Tool may not have executed successfully.`,
+      );
+    }
+
+    return output;
   }
 
   /**
@@ -227,12 +247,23 @@ export class ApprovalService {
         await this.em.persistAndFlush(entity);
       }
 
+      const coachingHint = this.buildCoachingHint(
+        approval.coachingFeedback ?? action.coaching,
+      );
+
       this.logger.log(
         `Tool "${approval.toolName}" executed successfully: ${JSON.stringify(toolOutput).substring(0, 100)}`,
       );
 
       // Invoke agent để lấy AI response
-      const agentInput = `Tool "${approval.toolName}" executed successfully with result: ${JSON.stringify(toolOutput)}`;
+      const agentInput = [
+        coachingHint,
+        `Tool "${approval.toolName}" executed successfully with result: ${JSON.stringify(toolOutput)}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      this.logger.debug('Invoking AI agent with input: ' + agentInput);
 
       const agentResponse = await this.aiAgentService.invokeAgent(
         agentInput,
@@ -243,23 +274,41 @@ export class ApprovalService {
 
       const aiResponse = this.extractAgentResponse(agentResponse);
 
+      const latest = await this.em.findOneOrFail(PendingApprovalEntity, { id: approvalId });
+
       this.logger.log(
         `Got AI response for approval ${approvalId}: ${aiResponse.substring(0, 100)}...`,
       );
 
       return {
-        approval,
+        approval: this.mapEntityToInterface(latest),
         aiResponse,
       };
     } catch (error) {
       this.logger.error(
         `Error getting AI response for approval ${approvalId}: ${error.message}`,
       );
+      this.logger.debug('Error details: ' + JSON.stringify(error));
       return {
         approval,
         message: `Approval submitted but failed to execute tool: ${error.message}`,
       };
     }
+  }
+
+  private buildCoachingHint(
+    coaching?: ApprovalAction['coaching'],
+  ): string {
+    if (!coaching?.reason) return '';
+
+    return [
+      'Human coaching guidance (must follow):',
+      `- errorType: ${coaching.errorType || 'OTHER'}`,
+      `- reason: ${coaching.reason}`,
+      `- correction: ${coaching.correction || 'N/A'}`,
+      `- tags: ${(coaching.tags || []).join(', ') || 'N/A'}`,
+      '- Avoid repeating the same mistake and prioritize correction.',
+    ].join('\n');
   }
 
   private async executeTool(
@@ -328,6 +377,7 @@ export class ApprovalService {
       approvedAt: entity.approvedAt,
       approvedBy: entity.approvedBy,
       conversationContext: entity.conversationContext,
+      coachingFeedback: entity.coachingFeedback,
     };
   }
 }

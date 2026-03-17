@@ -1,5 +1,17 @@
-import { IsEnum, IsString, IsOptional, IsObject, IsNumber } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum } from 'class-validator';
 
 export enum ApprovalActionEnum {
   APPROVE = 'APPROVE',
@@ -56,4 +68,31 @@ export class GetPendingApprovalsDto {
   @IsOptional()
   @IsString()
   status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'MODIFIED';
+}
+
+export class CoachingFeedbackDto {
+  @IsOptional()
+  @IsIn(['HALLUCINATION', 'POLICY', 'FORMAT', 'DOMAIN', 'OTHER'])
+  errorType?: 'HALLUCINATION' | 'POLICY' | 'FORMAT' | 'DOMAIN' | 'OTHER';
+
+  @IsString()
+  @IsNotEmpty()
+  reason!: string;
+
+  @IsOptional()
+  @IsString()
+  correction?: string;
+
+  @IsOptional()
+  tags?: string[];
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  confidence?: number;
+
+  @IsString()
+  @IsNotEmpty()
+  coachedBy!: string;
 }

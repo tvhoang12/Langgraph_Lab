@@ -8,6 +8,7 @@ export interface PendingApproval {
   toolOutput: Record<string, any>;
   userNotes?: string;
   modifiedOutput?: Record<string, any>;
+  coachingFeedback?: CoachingFeedback;
   createdAt: Date;
   approvedAt?: Date;
   approvedBy?: string;
@@ -17,11 +18,23 @@ export interface PendingApproval {
   };
 }
 
+export interface CoachingFeedback {
+  errorType?: 'HALLUCINATION' | 'POLICY' | 'FORMAT' | 'DOMAIN' | 'OTHER';
+  reason: string;
+  correction?: string;            
+  tags?: string[];               
+  confidence?: number;            
+  coachedBy?: string;
+  coachedAt?: Date;
+}
+
+
 export interface ApprovalAction {
   action: 'APPROVE' | 'REJECT' | 'MODIFY';
   notes?: string;
   modifiedData?: Record<string, any>;
   approvedBy: string;
+  coaching?:CoachingFeedback;
 }
 
 export default PendingApproval;
