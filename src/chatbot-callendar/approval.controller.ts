@@ -2,14 +2,17 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Query,
-  UseGuards,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { ApprovalService } from './approval.service';
 import { SubmitApprovalDto, GetPendingApprovalsDto } from './dto/approval.dto';
+import { SubmitApprovalActionAndGetResponseDto } from './entities/submit-approval-action-and-get-response.dto';
 
 @ApiTags('Human Approval')
 @Controller('approval')
@@ -224,5 +227,83 @@ export class ApprovalController {
         approvals,
       },
     };
+  }
+
+  /**
+   * Submit approval action and get AI response
+   */
+  @Patch(':approvalId/submit-and-get-response')
+  @ApiOperation({
+    summary: 'Submit approval action and return regenerated agent response',
+  })
+  @ApiParam({
+    name: 'approvalId',
+    required: true,
+    description: 'Approval ID',
+  })
+  @ApiBody({
+    required: true,
+    schema: {
+      type: 'object',
+      required: ['action', 'approvedBy', 'sessionId'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['APPROVE', 'MODIFY', 'REJECT'],
+        },
+        approvedBy: { type: 'string' },
+        sessionId: { type: 'string' },
+        notes: { type: 'string' },
+        modifiedData: {
+          type: 'object',
+          additionalProperties: true,
+        },
+        coaching: {
+          type: 'object',
+          properties: {
+            errorType: { type: 'string', enum: ['DOMAIN', 'FORMAT', 'LOGIC', 'SAFETY', 'OTHER'] },
+            reason: { type: 'string' },
+            correction: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+            confidence: { type: 'number', minimum: 0, maximum: 1 },
+            coachedBy: { type: 'string' },
+          },
+        },
+      },
+      example: {
+        action: 'MODIFY',
+        approvedBy: 'reviewer-john',
+        sessionId: 'replace-with-your-session-id',
+        notes: 'Sửa để kiểm tra timezone',
+        modifiedData: {
+          lunar_birth_year: 1990,
+          activity: 'Khai trương',
+          start_date: '2026-03-01',
+          end_date: '2026-03-31',
+        },
+        coaching: {
+          errorType: 'DOMAIN',
+          reason: 'AI chưa xác nhận timezone người dùng trước khi đề xuất ngày tốt',
+          correction: 'Phải kiểm tra timezone của user (GMT+7) trước khi tính ngày tốt',
+          tags: ['timezone', 'calendar', 'domain'],
+          confidence: 0.95,
+          coachedBy: 'reviewer-john',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Submitted and regenerated response successfully' })
+  async submitAndGetResponse(
+    @Param('approvalId') approvalId: string,
+    @Body() dto: SubmitApprovalActionAndGetResponseDto,
+  ) {
+
+    return this.approvalService.submitApprovalActionAndGetResponse(
+      approvalId,
+      dto,
+      dto.sessionId,
+      dto.lunarBirthYear,
+      dto.activity,
+    );
   }
 }

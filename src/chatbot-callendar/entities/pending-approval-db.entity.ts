@@ -39,6 +39,17 @@ export class PendingApprovalEntity {
   @Property({ type: 'jsonb', nullable: true })
   modifiedOutput?: Record<string, any>;
 
+  @Property({ type: 'jsonb', nullable: true })
+  coachingFeedback?: {
+    errorType?: 'HALLUCINATION' | 'POLICY' | 'FORMAT' | 'DOMAIN' | 'OTHER';
+    reason: string;
+    correction?: string;
+    tags?: string[];
+    confidence?: number;
+    coachedBy: string;
+    coachedAt: Date;
+  };
+
   @Property({ type: 'timestamptz' })
   createdAt: Date = new Date();
 
